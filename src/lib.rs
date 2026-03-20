@@ -39,7 +39,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     }
 
     let json_output = cli.upscale.json;
-    let show_progress = !json_output && std::io::stderr().is_terminal();
+    let show_progress =
+        !json_output && (std::io::stderr().is_terminal() || std::io::stdout().is_terminal());
     let quiet_subprocesses = json_output || show_progress;
     let settings = config::resolve(cli.upscale)?;
     let input_path = settings.input.canonicalize().with_context(|| {

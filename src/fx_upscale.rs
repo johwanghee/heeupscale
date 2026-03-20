@@ -9,7 +9,6 @@ use tempfile::TempDir;
 use crate::config::Settings;
 use crate::ffmpeg;
 use crate::planner::UpscalePlan;
-use crate::progress::{StageProgress, run_command_with_percent_progress};
 
 const OUTPUT_CODEC: &str = "h264";
 
@@ -82,42 +81,31 @@ pub fn run_pipeline(
     quiet: bool,
     show_progress: bool,
 ) -> Result<()> {
-    let progress = StageProgress::new(3, show_progress);
     let workspace =
         TempDir::new().with_context(|| "failed to create temporary fx-upscale workspace")?;
     let staged_input = workspace.path().join(input_file_name(&plan.input_path));
-    progress.set(1, "Preparing input", 0.0);
-    if let Err(error) = stage_input(&plan.input_path, &staged_input) {
-        progress.abandon();
-        return Err(error);
+    if show_progress {
+        eprintln!("1/3 Preparing input");
     }
-    progress.set(1, "Preparing input", 1.0);
+    stage_input(&plan.input_path, &staged_input)?;
 
     let staged_output = staged_output_path(&staged_input);
-    progress.set(2, "AI upscaling", 0.0);
     if show_progress {
-        if let Err(error) = run_command_with_percent_progress(
+        eprintln!("2/3 AI upscaling");
+        run_args(
             &settings.fx_upscale_bin,
             &upscale_args(&staged_input, plan.target.width, plan.target.height),
-            &progress,
-            2,
-            "AI upscaling",
-        ) {
-            progress.abandon();
-            return Err(error);
-        }
+            false,
+        )?;
     } else if let Err(error) = run_args(
         &settings.fx_upscale_bin,
         &upscale_args(&staged_input, plan.target.width, plan.target.height),
         quiet,
     ) {
-        progress.abandon();
         return Err(error);
     }
-    progress.set(2, "AI upscaling", 1.0);
 
     if !staged_output.is_file() {
-        progress.abandon();
         bail!(
             "`{}` finished without producing the expected output `{}`",
             settings.fx_upscale_bin,
@@ -125,13 +113,10 @@ pub fn run_pipeline(
         );
     }
 
-    progress.set(3, "Finalizing output", 0.0);
-    if let Err(error) = place_output(&staged_output, &plan.output_path, settings.overwrite) {
-        progress.abandon();
-        return Err(error);
+    if show_progress {
+        eprintln!("3/3 Finalizing output");
     }
-    progress.set(3, "Finalizing output", 1.0);
-    progress.finish("Upscale complete");
+    place_output(&staged_output, &plan.output_path, settings.overwrite)?;
     Ok(())
 }
 
