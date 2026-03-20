@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
+use crate::cli::RealEsrganModel;
 use crate::config::Settings;
 use crate::ffmpeg::{self, AssembleVideoParams, VideoMetadata};
 use crate::planner::{Dimensions, UpscalePlan};
@@ -48,7 +49,7 @@ pub fn render_commands(
     let output_frames_pattern = PathBuf::from("$TMPDIR/output_frames/frame_%08d.png");
     let input_frames_dir = Path::new("$TMPDIR/input_frames");
     let output_frames_dir = Path::new("$TMPDIR/output_frames");
-    let ai_scale = inference_scale_for(plan.scale_factor);
+    let ai_scale = inference_scale_for(settings.realesrgan_model, plan.scale_factor);
     let post_scale_filter = post_scale_filter(plan.ai_target, plan.target);
 
     let extract =
@@ -89,7 +90,7 @@ pub fn run_pipeline(
 
     let input_frames_pattern = input_frames_dir.join("frame_%08d.png");
     let output_frames_pattern = output_frames_dir.join("frame_%08d.png");
-    let ai_scale = inference_scale_for(plan.scale_factor);
+    let ai_scale = inference_scale_for(settings.realesrgan_model, plan.scale_factor);
     let post_scale_filter = post_scale_filter(plan.ai_target, plan.target);
 
     ffmpeg::run_args(
@@ -123,13 +124,20 @@ pub fn run_pipeline(
     Ok(())
 }
 
-pub fn inference_scale_for(requested_scale: f64) -> u8 {
-    if requested_scale <= 2.0 {
-        2
-    } else if requested_scale <= 3.0 {
-        3
-    } else {
-        4
+pub fn inference_scale_for(model: RealEsrganModel, requested_scale: f64) -> u8 {
+    match model {
+        RealEsrganModel::RealesrAnimevideov3 => {
+            if requested_scale <= 2.0 {
+                2
+            } else if requested_scale <= 3.0 {
+                3
+            } else {
+                4
+            }
+        }
+        RealEsrganModel::RealesrganX4plus
+        | RealEsrganModel::RealesrganX4plusAnime
+        | RealEsrganModel::RealesrnetX4plus => 4,
     }
 }
 
@@ -230,7 +238,8 @@ fn smoke_test(settings: &Settings) -> Result<()> {
         bail!("ffmpeg smoke test image generation failed with status {ffmpeg_status}");
     }
 
-    let status = Command::new(&settings.realesrgan_bin)
+    let mut command = Command::new(&settings.realesrgan_bin);
+    command
         .arg("-i")
         .arg(&input_path)
         .arg("-o")
@@ -238,21 +247,24 @@ fn smoke_test(settings: &Settings) -> Result<()> {
         .arg("-n")
         .arg(settings.realesrgan_model.as_binary_value())
         .arg("-s")
-        .arg("2")
+        .arg(inference_scale_for(settings.realesrgan_model, 2.0).to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to spawn `{}` for smoke test",
-                settings.realesrgan_bin
-            )
-        })?;
+        .stderr(Stdio::null());
+    if let Some(model_path) = &settings.realesrgan_model_path {
+        command.arg("-m").arg(model_path);
+    }
+
+    let status = command.status().with_context(|| {
+        format!(
+            "failed to spawn `{}` for smoke test",
+            settings.realesrgan_bin
+        )
+    })?;
 
     if !status.success() || !output_path.exists() {
         bail!(
-            "`{}` failed a runtime smoke test. On this machine the official macOS binary appears incompatible, so use `engine = \"auto\"` or `engine = \"ffmpeg\"` unless you replace it with a working build.",
-            settings.realesrgan_bin
+            "`{}` failed a runtime smoke test. Check that the binary works on this machine and that `realesrgan_model_path` contains the selected model files.",
+            settings.realesrgan_bin,
         );
     }
 
@@ -277,7 +289,7 @@ mod tests {
             scaler: Scaler::Lanczos,
             filter_profile: FilterProfile::Auto,
             fx_upscale_bin: "fx-upscale".to_string(),
-            realesrgan_model: RealEsrganModel::RealesrnetX4plus,
+            realesrgan_model: RealEsrganModel::RealesrganX4plus,
             realesrgan_bin: "realesrgan-ncnn-vulkan".to_string(),
             realesrgan_model_path: None,
             realesrgan_tile: 0,
@@ -294,10 +306,26 @@ mod tests {
 
     #[test]
     fn inference_scale_rounds_up_to_supported_value() {
-        assert_eq!(inference_scale_for(1.5), 2);
-        assert_eq!(inference_scale_for(2.0), 2);
-        assert_eq!(inference_scale_for(2.2), 3);
-        assert_eq!(inference_scale_for(3.6), 4);
+        assert_eq!(
+            inference_scale_for(RealEsrganModel::RealesrAnimevideov3, 1.5),
+            2
+        );
+        assert_eq!(
+            inference_scale_for(RealEsrganModel::RealesrAnimevideov3, 2.0),
+            2
+        );
+        assert_eq!(
+            inference_scale_for(RealEsrganModel::RealesrAnimevideov3, 2.2),
+            3
+        );
+        assert_eq!(
+            inference_scale_for(RealEsrganModel::RealesrAnimevideov3, 3.6),
+            4
+        );
+        assert_eq!(
+            inference_scale_for(RealEsrganModel::RealesrganX4plus, 2.0),
+            4
+        );
     }
 
     #[test]
@@ -323,7 +351,7 @@ mod tests {
         let args = upscale_args(&settings, Path::new("/tmp/in"), Path::new("/tmp/out"), 2);
         let rendered = render_args(&settings.realesrgan_bin, &args);
 
-        assert!(rendered.contains("realesrnet-x4plus"));
+        assert!(rendered.contains("realesrgan-x4plus"));
         assert!(rendered.contains(" -s 2 "));
         assert!(rendered.contains(" -f png "));
     }

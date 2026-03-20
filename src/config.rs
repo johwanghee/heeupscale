@@ -16,8 +16,9 @@ const DEFAULT_PRESET: EncodePreset = EncodePreset::Slow;
 const DEFAULT_SCALER: Scaler = Scaler::Lanczos;
 const DEFAULT_FILTER_PROFILE: FilterProfile = FilterProfile::Auto;
 const DEFAULT_FX_UPSCALE_BIN: &str = "fx-upscale";
-const DEFAULT_REALESRGAN_MODEL: RealEsrganModel = RealEsrganModel::RealesrnetX4plus;
+const DEFAULT_REALESRGAN_MODEL: RealEsrganModel = RealEsrganModel::RealesrganX4plus;
 const DEFAULT_REALESRGAN_BIN: &str = "realesrgan-ncnn-vulkan";
+const DEFAULT_REALESRGAN_MODEL_PATH_SUFFIX: &str = ".local/share/heeupscale/realesrgan-models";
 const DEFAULT_REALESRGAN_TILE: u32 = 0;
 const DEFAULT_REALESRGAN_TTA: bool = false;
 const DEFAULT_AUDIO_BITRATE_KBPS: u16 = 192;
@@ -197,7 +198,8 @@ pub fn resolve(args: UpscaleArgs) -> Result<Settings> {
         realesrgan_model_path: args
             .realesrgan_model_path
             .or_else(|| config.and_then(|config| config.realesrgan_model_path.clone()))
-            .map(|path| resolve_config_relative_path(loaded.as_ref(), path)),
+            .map(|path| resolve_config_relative_path(loaded.as_ref(), path))
+            .or_else(default_realesrgan_model_path),
         realesrgan_tile: args
             .realesrgan_tile
             .or(config.and_then(|config| config.realesrgan_tile))
@@ -418,7 +420,7 @@ fn resolve_config_relative_path(loaded: Option<&LoadedConfig>, path: PathBuf) ->
 }
 
 fn project_template() -> String {
-    format!(
+    let mut template = format!(
         concat!(
             "[heeupscale]\n",
             "engine = \"{}\"\n",
@@ -456,7 +458,29 @@ fn project_template() -> String {
         DEFAULT_OVERWRITE,
         DEFAULT_FFMPEG_BIN,
         DEFAULT_FFPROBE_BIN,
-    )
+    );
+
+    if let Some(path) = default_realesrgan_model_path() {
+        template.push_str(&format!(
+            "# realesrgan_model_path auto-detected on this machine: \"{}\"\n",
+            path.display()
+        ));
+    } else {
+        template.push_str(
+            "# realesrgan_model_path is auto-detected when ~/.local/share/heeupscale/realesrgan-models exists.\n",
+        );
+    }
+
+    template
+}
+
+fn default_realesrgan_model_path() -> Option<PathBuf> {
+    let path = home_dir()?.join(DEFAULT_REALESRGAN_MODEL_PATH_SUFFIX);
+    path.exists().then_some(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
 }
 
 fn engine_value(engine: Engine) -> &'static str {
@@ -488,7 +512,7 @@ mod tests {
             engine = "fx-upscale"
             scale = 1.5
             profile = "auto"
-            realesrgan_model = "realesrnet-x4plus"
+            realesrgan_model = "realesrgan-x4plus"
             open = true
             output_dir = "exports"
             "#,
@@ -501,7 +525,7 @@ mod tests {
         assert_eq!(config.profile, Some(FilterProfile::Auto));
         assert_eq!(
             config.realesrgan_model,
-            Some(RealEsrganModel::RealesrnetX4plus)
+            Some(RealEsrganModel::RealesrganX4plus)
         );
         assert_eq!(config.open, Some(true));
         assert_eq!(config.output_dir, Some(PathBuf::from("exports")));
@@ -539,6 +563,7 @@ mod tests {
         assert!(content.contains("engine = \"auto\""));
         assert!(content.contains("profile = \"auto\""));
         assert!(content.contains("fx_upscale_bin = \"fx-upscale\""));
+        assert!(content.contains("realesrgan_model = \"realesrgan-x4plus\""));
         assert!(content.contains("realesrgan_bin = \"realesrgan-ncnn-vulkan\""));
         assert!(content.contains("open = false"));
         assert!(content.contains("ffmpeg_bin = \"ffmpeg\""));

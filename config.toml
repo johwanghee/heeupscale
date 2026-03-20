@@ -6,7 +6,7 @@ preset = "slow"
 scaler = "lanczos"
 profile = "auto"
 fx_upscale_bin = "fx-upscale"
-realesrgan_model = "realesrnet-x4plus"
+realesrgan_model = "realesrgan-x4plus"
 realesrgan_bin = "realesrgan-ncnn-vulkan"
 realesrgan_tile = 0
 realesrgan_tta = false
@@ -17,3 +17,4 @@ ffmpeg_bin = "ffmpeg"
 ffprobe_bin = "ffprobe"
 # output_dir is unset by default, so the output is written next to the input file.
 # output_dir = "exports"
+# realesrgan_model_path is auto-detected when ~/.local/share/heeupscale/realesrgan-models exists.

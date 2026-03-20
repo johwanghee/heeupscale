@@ -37,8 +37,8 @@
 
 ### `auto`
 
-- 저해상도는 `fx-upscale` 우선
-- `fx-upscale`가 없으면 `realesrgan`
+- 저해상도는 `realesrgan` 우선
+- `realesrgan`를 못 쓰면 `fx-upscale`
 - 둘 다 없으면 `ffmpeg`
 - 큰 해상도는 기본적으로 `ffmpeg`
 
@@ -71,7 +71,7 @@ preset = "slow"
 scaler = "lanczos"
 profile = "auto"
 fx_upscale_bin = "fx-upscale"
-realesrgan_model = "realesrnet-x4plus"
+realesrgan_model = "realesrgan-x4plus"
 realesrgan_bin = "realesrgan-ncnn-vulkan"
 realesrgan_tile = 0
 realesrgan_tta = false
@@ -80,6 +80,7 @@ open = false
 overwrite = false
 ffmpeg_bin = "ffmpeg"
 ffprobe_bin = "ffprobe"
+# realesrgan_model_path is auto-detected when ~/.local/share/heeupscale/realesrgan-models exists.
 ```
 
 기본 출력 폴더는 별도 키가 없으면 “입력 파일 옆”입니다.

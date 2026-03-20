@@ -46,7 +46,8 @@ impl UpscalePlan {
         let ai_target = upscale_dimensions(
             source.width,
             source.height,
-            crate::realesrgan::inference_scale_for(settings.scale) as f64,
+            crate::realesrgan::inference_scale_for(settings.realesrgan_model, settings.scale)
+                as f64,
         )?;
         let scale_label = format_scale(settings.scale);
         let (filter_profile_label, filter_graph) =

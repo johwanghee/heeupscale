@@ -52,7 +52,7 @@ That uses built-in defaults:
 - scaler: `lanczos`
 - profile: `auto`
 - fx-upscale binary: `fx-upscale`
-- realesrgan model: `realesrnet-x4plus`
+- realesrgan model: `realesrgan-x4plus`
 - audio: `aac 192k`
 - output: `<same folder>/<name>_upscaled_2x.mp4`
 
@@ -86,7 +86,7 @@ preset = "slow"
 scaler = "lanczos"
 profile = "auto"
 fx_upscale_bin = "fx-upscale"
-realesrgan_model = "realesrnet-x4plus"
+realesrgan_model = "realesrgan-x4plus"
 realesrgan_bin = "realesrgan-ncnn-vulkan"
 realesrgan_tile = 0
 realesrgan_tta = false
@@ -97,6 +97,7 @@ ffmpeg_bin = "ffmpeg"
 ffprobe_bin = "ffprobe"
 # output_dir is unset by default, so the output is written next to the input file.
 # output_dir = "exports"
+# realesrgan_model_path is auto-detected when ~/.local/share/heeupscale/realesrgan-models exists.
 ```
 
 Auto-discovery rules:
@@ -222,9 +223,9 @@ That combination is a good baseline for IINA, Finder previews, and general playe
 
 Plain FFmpeg scaling cannot invent new detail. `profile = "auto"` tries to make low-resolution sources look less harsh by applying a gentle denoise before scaling and a light sharpen after scaling. It usually helps more than pure scaling on old low-bitrate files, but it is still not an AI upscaler.
 
-On Apple Silicon, `fx-upscale` is currently the preferred AI backend because it works directly on video and uses Metal. `heeupscale` runs it in a temporary workspace, then moves the resulting `mp4` to the final output path you requested.
+On this Apple Silicon setup, `heeupscale` now prefers `realesrgan-ncnn-vulkan` for low-resolution sources when a working build and model set are installed. It runs Real-ESRGAN on extracted PNG frames, then assembles the video again with FFmpeg.
 
-If `fx-upscale` is not available, `heeupscale` can still call `realesrgan-ncnn-vulkan` as an external backend. That integration follows the official image-sequence usage: extract frames, run Real-ESRGAN on PNG frames, then assemble the video again with FFmpeg.
+If `realesrgan` is not available, `heeupscale` falls back to `fx-upscale`, which still works directly on video and uses Metal.
 
 Install `fx-upscale` and `realesrgan-ncnn-vulkan` from their official sources:
 

@@ -54,8 +54,8 @@ heeupscale init [DIR]
 
 `engine = "auto"`일 때:
 
-1. 입력 영상이 저해상도(`<= 640x360`)면 `fx-upscale`를 먼저 시도
-2. `fx-upscale`를 쓸 수 없으면 `realesrgan`
+1. 입력 영상이 저해상도(`<= 640x360`)면 `realesrgan`를 먼저 시도
+2. `realesrgan`를 쓸 수 없으면 `fx-upscale`
 3. 그것도 안 되면 `ffmpeg`
 4. 더 큰 해상도는 기본적으로 `ffmpeg`
 

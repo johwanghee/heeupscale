@@ -292,10 +292,10 @@ fn resolve_engine(settings: &Settings, source: &ffmpeg::VideoMetadata) -> Runtim
         Engine::Realesrgan => RuntimeEngine::Realesrgan,
         Engine::Auto => {
             if source.width <= 640 && source.height <= 360 {
-                if fx_upscale::is_available(settings) {
-                    RuntimeEngine::FxUpscale
-                } else if realesrgan::is_available(settings) {
+                if realesrgan::is_available(settings) {
                     RuntimeEngine::Realesrgan
+                } else if fx_upscale::is_available(settings) {
+                    RuntimeEngine::FxUpscale
                 } else {
                     RuntimeEngine::Ffmpeg
                 }
