@@ -223,9 +223,9 @@ That combination is a good baseline for IINA, Finder previews, and general playe
 
 Plain FFmpeg scaling cannot invent new detail. `profile = "auto"` tries to make low-resolution sources look less harsh by applying a gentle denoise before scaling and a light sharpen after scaling. It usually helps more than pure scaling on old low-bitrate files, but it is still not an AI upscaler.
 
-On this Apple Silicon setup, `heeupscale` now prefers `realesrgan-ncnn-vulkan` for low-resolution sources when a working build and model set are installed. It runs Real-ESRGAN on extracted PNG frames, then assembles the video again with FFmpeg.
+On Apple Silicon, `fx-upscale` remains the preferred default AI backend because it works directly on video and is much faster for everyday use.
 
-If `realesrgan` is not available, `heeupscale` falls back to `fx-upscale`, which still works directly on video and uses Metal.
+If you explicitly want a slower frame-by-frame AI path, `heeupscale` can still call `realesrgan-ncnn-vulkan`. That integration extracts PNG frames, runs Real-ESRGAN, then assembles the video again with FFmpeg.
 
 Install `fx-upscale` and `realesrgan-ncnn-vulkan` from their official sources:
 

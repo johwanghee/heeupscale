@@ -37,8 +37,8 @@
 
 ### `auto`
 
-- 저해상도는 `realesrgan` 우선
-- `realesrgan`를 못 쓰면 `fx-upscale`
+- 저해상도는 `fx-upscale` 우선
+- `fx-upscale`가 없으면 `realesrgan`
 - 둘 다 없으면 `ffmpeg`
 - 큰 해상도는 기본적으로 `ffmpeg`
 
