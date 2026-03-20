@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
@@ -10,6 +12,7 @@ use crate::cli::RealEsrganModel;
 use crate::config::Settings;
 use crate::ffmpeg::{self, AssembleVideoParams, VideoMetadata};
 use crate::planner::{Dimensions, UpscalePlan};
+use crate::progress::StageProgress;
 
 pub fn is_available(settings: &Settings) -> bool {
     smoke_test(settings).is_ok()
@@ -79,7 +82,9 @@ pub fn run_pipeline(
     plan: &UpscalePlan,
     source: &VideoMetadata,
     quiet: bool,
+    show_progress: bool,
 ) -> Result<()> {
+    let progress = StageProgress::new(3, show_progress);
     let temp_dir = TempDir::new().with_context(|| "failed to create temporary workspace")?;
     let input_frames_dir = temp_dir.path().join("input_frames");
     let output_frames_dir = temp_dir.path().join("output_frames");
@@ -93,19 +98,81 @@ pub fn run_pipeline(
     let ai_scale = inference_scale_for(settings.realesrgan_model, plan.scale_factor);
     let post_scale_filter = post_scale_filter(plan.ai_target, plan.target);
 
-    ffmpeg::run_args(
+    progress.set(1, "Extracting frames", 0.0);
+    if show_progress {
+        if let Err(error) = ffmpeg::run_args_with_progress(
+            &settings.ffmpeg_bin,
+            &ffmpeg::extract_frames_args(
+                settings.overwrite,
+                &plan.input_path,
+                &input_frames_pattern,
+            ),
+            &progress,
+            1,
+            "Extracting frames",
+            source.duration_seconds,
+        ) {
+            progress.abandon();
+            return Err(error);
+        }
+    } else if let Err(error) = ffmpeg::run_args(
         &settings.ffmpeg_bin,
         &ffmpeg::extract_frames_args(settings.overwrite, &plan.input_path, &input_frames_pattern),
         quiet,
-    )?;
+    ) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(1, "Extracting frames", 1.0);
 
-    run_args(
+    progress.set(2, "AI upscaling", 0.0);
+    if show_progress {
+        if let Err(error) = run_args_with_frame_progress(
+            &settings.realesrgan_bin,
+            &upscale_args(settings, &input_frames_dir, &output_frames_dir, ai_scale),
+            &input_frames_dir,
+            &output_frames_dir,
+            &progress,
+            2,
+            "AI upscaling",
+        ) {
+            progress.abandon();
+            return Err(error);
+        }
+    } else if let Err(error) = run_args(
         &settings.realesrgan_bin,
         &upscale_args(settings, &input_frames_dir, &output_frames_dir, ai_scale),
         quiet,
-    )?;
+    ) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(2, "AI upscaling", 1.0);
 
-    ffmpeg::run_args(
+    progress.set(3, "Assembling video", 0.0);
+    if show_progress {
+        if let Err(error) = ffmpeg::run_args_with_progress(
+            &settings.ffmpeg_bin,
+            &ffmpeg::assemble_video_args(&AssembleVideoParams {
+                overwrite: settings.overwrite,
+                frames_pattern: &output_frames_pattern,
+                original_input: &plan.input_path,
+                frame_rate_expr: source.frame_rate_expr.as_deref().unwrap_or("24"),
+                output_path: &plan.output_path,
+                post_scale_filter: post_scale_filter.as_deref(),
+                preset: plan.preset.as_ffmpeg_value(),
+                crf: plan.crf,
+                audio_bitrate_kbps: plan.audio_bitrate_kbps,
+            }),
+            &progress,
+            3,
+            "Assembling video",
+            source.duration_seconds,
+        ) {
+            progress.abandon();
+            return Err(error);
+        }
+    } else if let Err(error) = ffmpeg::run_args(
         &settings.ffmpeg_bin,
         &ffmpeg::assemble_video_args(&AssembleVideoParams {
             overwrite: settings.overwrite,
@@ -119,7 +186,12 @@ pub fn run_pipeline(
             audio_bitrate_kbps: plan.audio_bitrate_kbps,
         }),
         quiet,
-    )?;
+    ) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(3, "Assembling video", 1.0);
+    progress.finish("Upscale complete");
 
     Ok(())
 }
@@ -205,6 +277,69 @@ fn run_args(binary: &str, args: &[OsString], quiet: bool) -> Result<()> {
     }
 
     bail!("realesrgan exited with status {status}")
+}
+
+fn run_args_with_frame_progress(
+    binary: &str,
+    args: &[OsString],
+    input_dir: &Path,
+    output_dir: &Path,
+    progress: &StageProgress,
+    stage: u64,
+    label: &str,
+) -> Result<()> {
+    let total_frames = count_frames(input_dir)?;
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn `{binary}`"))?;
+
+    progress.set(stage, label, 0.0);
+
+    loop {
+        let processed_frames = count_frames(output_dir)?;
+        if total_frames > 0 {
+            let fraction = (processed_frames as f64 / total_frames as f64).clamp(0.0, 1.0);
+            progress.set(stage, label, fraction);
+        }
+
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to wait for `{binary}`"))?
+        {
+            if status.success() {
+                progress.set(stage, label, 1.0);
+                return Ok(());
+            }
+
+            bail!("realesrgan exited with status {status}");
+        }
+
+        thread::sleep(Duration::from_millis(120));
+    }
+}
+
+fn count_frames(directory: &Path) -> Result<usize> {
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(directory)
+        .with_context(|| format!("failed to read `{}`", directory.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed to inspect `{}`", directory.display()))?;
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn smoke_test(settings: &Settings) -> Result<()> {

@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::ErrorKind;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -7,11 +8,13 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::planner::UpscalePlan;
+use crate::progress::StageProgress;
 
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
     pub width: u32,
     pub height: u32,
+    pub duration_seconds: Option<f64>,
     pub frame_rate_expr: Option<String>,
     pub frame_rate: Option<f64>,
     pub pixel_format: Option<String>,
@@ -51,7 +54,7 @@ pub fn probe_video(ffprobe_bin: &str, input_path: &Path) -> Result<VideoMetadata
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate,pix_fmt",
+            "stream=width,height,r_frame_rate,pix_fmt:format=duration",
             "-of",
             "json",
         ])
@@ -83,6 +86,10 @@ pub fn probe_video(ffprobe_bin: &str, input_path: &Path) -> Result<VideoMetadata
     Ok(VideoMetadata {
         width,
         height,
+        duration_seconds: response
+            .format
+            .and_then(|format| format.duration)
+            .and_then(|value| value.parse().ok()),
         frame_rate_expr: stream.r_frame_rate.clone(),
         frame_rate: stream.r_frame_rate.as_deref().and_then(parse_frame_rate),
         pixel_format: stream.pix_fmt,
@@ -110,6 +117,24 @@ pub fn run_ffmpeg(
     }
 
     bail!("ffmpeg exited with status {status}");
+}
+
+pub fn run_ffmpeg_with_progress(
+    ffmpeg_bin: &str,
+    overwrite: bool,
+    plan: &UpscalePlan,
+    progress: &StageProgress,
+    stage: u64,
+    label: &str,
+) -> Result<()> {
+    run_args_with_progress(
+        ffmpeg_bin,
+        &command_args(overwrite, plan),
+        progress,
+        stage,
+        label,
+        plan.source.duration_seconds,
+    )
 }
 
 pub fn open_in_iina(output_path: &Path) -> Result<()> {
@@ -150,6 +175,57 @@ pub fn run_args(ffmpeg_bin: &str, args: &[OsString], quiet: bool) -> Result<()> 
         .with_context(|| format!("failed to spawn `{ffmpeg_bin}`"))?;
 
     if status.success() {
+        return Ok(());
+    }
+
+    bail!("ffmpeg exited with status {status}");
+}
+
+pub fn run_args_with_progress(
+    ffmpeg_bin: &str,
+    args: &[OsString],
+    progress: &StageProgress,
+    stage: u64,
+    label: &str,
+    duration_seconds: Option<f64>,
+) -> Result<()> {
+    let mut command = Command::new(ffmpeg_bin);
+    command
+        .args(args)
+        .arg("-nostats")
+        .arg("-progress")
+        .arg("pipe:2")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn `{ffmpeg_bin}`"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .with_context(|| format!("failed to capture progress output from `{ffmpeg_bin}`"))?;
+
+    progress.set(stage, label, 0.0);
+
+    for line in BufReader::new(stderr).lines() {
+        let line = line.with_context(|| format!("failed to read progress from `{ffmpeg_bin}`"))?;
+        if line == "progress=end" {
+            progress.set(stage, label, 1.0);
+            continue;
+        }
+
+        if let Some(fraction) = parse_progress_fraction(&line, duration_seconds) {
+            progress.set(stage, label, fraction);
+        }
+    }
+
+    let status = child
+        .wait()
+        .with_context(|| format!("failed to wait for `{ffmpeg_bin}`"))?;
+
+    if status.success() {
+        progress.set(stage, label, 1.0);
         return Ok(());
     }
 
@@ -302,6 +378,7 @@ fn parse_frame_rate(value: &str) -> Option<f64> {
 struct FfprobeResponse {
     #[serde(default)]
     streams: Vec<FfprobeStream>,
+    format: Option<FfprobeFormat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,4 +387,41 @@ struct FfprobeStream {
     height: Option<u32>,
     r_frame_rate: Option<String>,
     pix_fmt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeFormat {
+    duration: Option<String>,
+}
+
+fn parse_progress_fraction(line: &str, duration_seconds: Option<f64>) -> Option<f64> {
+    let duration_seconds = duration_seconds?;
+    if duration_seconds <= 0.0 {
+        return None;
+    }
+
+    if let Some(value) = line.strip_prefix("out_time=") {
+        let seconds = parse_timestamp_seconds(value)?;
+        return Some((seconds / duration_seconds).clamp(0.0, 1.0));
+    }
+
+    if let Some(value) = line.strip_prefix("out_time_us=") {
+        let microseconds: f64 = value.parse().ok()?;
+        return Some(((microseconds / 1_000_000.0) / duration_seconds).clamp(0.0, 1.0));
+    }
+
+    if let Some(value) = line.strip_prefix("out_time_ms=") {
+        let microseconds: f64 = value.parse().ok()?;
+        return Some(((microseconds / 1_000_000.0) / duration_seconds).clamp(0.0, 1.0));
+    }
+
+    None
+}
+
+fn parse_timestamp_seconds(value: &str) -> Option<f64> {
+    let mut parts = value.trim().split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
 }

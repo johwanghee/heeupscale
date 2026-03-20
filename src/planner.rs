@@ -269,6 +269,7 @@ mod tests {
         let source = VideoMetadata {
             width: 480,
             height: 272,
+            duration_seconds: Some(10.0),
             frame_rate_expr: Some("24/1".to_string()),
             frame_rate: Some(24.0),
             pixel_format: Some("yuv420p".to_string()),
@@ -295,6 +296,7 @@ mod tests {
         let source = VideoMetadata {
             width: 1920,
             height: 1080,
+            duration_seconds: Some(10.0),
             frame_rate_expr: Some("24/1".to_string()),
             frame_rate: Some(24.0),
             pixel_format: Some("yuv420p".to_string()),

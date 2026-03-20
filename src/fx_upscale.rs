@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use crate::config::Settings;
 use crate::ffmpeg;
 use crate::planner::UpscalePlan;
+use crate::progress::{StageProgress, run_command_with_percent_progress};
 
 const OUTPUT_CODEC: &str = "h264";
 
@@ -75,20 +76,48 @@ pub fn render_commands(settings: &Settings, plan: &UpscalePlan) -> Vec<String> {
     ]
 }
 
-pub fn run_pipeline(settings: &Settings, plan: &UpscalePlan, quiet: bool) -> Result<()> {
+pub fn run_pipeline(
+    settings: &Settings,
+    plan: &UpscalePlan,
+    quiet: bool,
+    show_progress: bool,
+) -> Result<()> {
+    let progress = StageProgress::new(3, show_progress);
     let workspace =
         TempDir::new().with_context(|| "failed to create temporary fx-upscale workspace")?;
     let staged_input = workspace.path().join(input_file_name(&plan.input_path));
-    stage_input(&plan.input_path, &staged_input)?;
+    progress.set(1, "Preparing input", 0.0);
+    if let Err(error) = stage_input(&plan.input_path, &staged_input) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(1, "Preparing input", 1.0);
 
     let staged_output = staged_output_path(&staged_input);
-    run_args(
+    progress.set(2, "AI upscaling", 0.0);
+    if show_progress {
+        if let Err(error) = run_command_with_percent_progress(
+            &settings.fx_upscale_bin,
+            &upscale_args(&staged_input, plan.target.width, plan.target.height),
+            &progress,
+            2,
+            "AI upscaling",
+        ) {
+            progress.abandon();
+            return Err(error);
+        }
+    } else if let Err(error) = run_args(
         &settings.fx_upscale_bin,
         &upscale_args(&staged_input, plan.target.width, plan.target.height),
         quiet,
-    )?;
+    ) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(2, "AI upscaling", 1.0);
 
     if !staged_output.is_file() {
+        progress.abandon();
         bail!(
             "`{}` finished without producing the expected output `{}`",
             settings.fx_upscale_bin,
@@ -96,7 +125,13 @@ pub fn run_pipeline(settings: &Settings, plan: &UpscalePlan, quiet: bool) -> Res
         );
     }
 
-    place_output(&staged_output, &plan.output_path, settings.overwrite)?;
+    progress.set(3, "Finalizing output", 0.0);
+    if let Err(error) = place_output(&staged_output, &plan.output_path, settings.overwrite) {
+        progress.abandon();
+        return Err(error);
+    }
+    progress.set(3, "Finalizing output", 1.0);
+    progress.finish("Upscale complete");
     Ok(())
 }
 
@@ -241,6 +276,7 @@ mod tests {
             source: VideoMetadata {
                 width: 480,
                 height: 272,
+                duration_seconds: Some(10.0),
                 frame_rate_expr: Some("24/1".to_string()),
                 frame_rate: Some(24.0),
                 pixel_format: Some("yuv420p".to_string()),

@@ -3,7 +3,10 @@ mod config;
 mod ffmpeg;
 mod fx_upscale;
 mod planner;
+mod progress;
 mod realesrgan;
+
+use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -36,6 +39,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     }
 
     let json_output = cli.upscale.json;
+    let show_progress = !json_output && std::io::stderr().is_terminal();
+    let quiet_subprocesses = json_output || show_progress;
     let settings = config::resolve(cli.upscale)?;
     let input_path = settings.input.canonicalize().with_context(|| {
         format!(
@@ -76,13 +81,44 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 
     match engine {
         RuntimeEngine::Ffmpeg => {
-            ffmpeg::run_ffmpeg(&settings.ffmpeg_bin, settings.overwrite, &plan, json_output)?;
+            if show_progress {
+                let progress = progress::StageProgress::new(1, true);
+                progress.set(1, "Encoding video", 0.0);
+                let result = ffmpeg::run_ffmpeg_with_progress(
+                    &settings.ffmpeg_bin,
+                    settings.overwrite,
+                    &plan,
+                    &progress,
+                    1,
+                    "Encoding video",
+                );
+                match result {
+                    Ok(()) => progress.finish("Encoding complete"),
+                    Err(error) => {
+                        progress.abandon();
+                        return Err(error);
+                    }
+                }
+            } else {
+                ffmpeg::run_ffmpeg(
+                    &settings.ffmpeg_bin,
+                    settings.overwrite,
+                    &plan,
+                    quiet_subprocesses,
+                )?;
+            }
         }
         RuntimeEngine::FxUpscale => {
-            fx_upscale::run_pipeline(&settings, &plan, json_output)?;
+            fx_upscale::run_pipeline(&settings, &plan, quiet_subprocesses, show_progress)?;
         }
         RuntimeEngine::Realesrgan => {
-            realesrgan::run_pipeline(&settings, &plan, &plan.source, json_output)?;
+            realesrgan::run_pipeline(
+                &settings,
+                &plan,
+                &plan.source,
+                quiet_subprocesses,
+                show_progress,
+            )?;
         }
     }
 
